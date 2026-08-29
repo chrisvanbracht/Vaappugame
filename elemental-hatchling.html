@@ -232,7 +232,7 @@ window.addEventListener('keydown', e=>{
   if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Enter','Escape'].includes(e.code)) e.preventDefault();
   keys[e.code]=true;
   if(e.code==='Space' && !e.repeat) player.jumpBufferFrames = JUMP_BUFFER_FRAMES;
-  if(e.code==='Enter') tryUsePortal();
+  if(e.code==='Enter'){ tryUsePortal(); tryGardenAction(); }
   if(e.code==='Escape') abandonLevel();
 });
 window.addEventListener('keyup', e=>{ keys[e.code]=false; });
@@ -1527,6 +1527,167 @@ function drawGoalDoor(lvl,t){
   }
   ctx.restore();
 }
+
+// ---------------------------------------------------------------------------
+// RENDERING — POTTERY TRIAL
+// ---------------------------------------------------------------------------
+function drawPot(p){
+  ctx.save();
+  ctx.fillStyle = '#8f5330';
+  ctx.beginPath(); ctx.ellipse(p.x+p.w/2, p.y+6, p.w/2, 5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#b5713f';
+  roundRect(p.x, p.y+4, p.w, p.h-4, 6); ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,0.28)'; ctx.lineWidth=1.4;
+  roundRect(p.x, p.y+4, p.w, p.h-4, 6); ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,0.12)';
+  ctx.fillRect(p.x+3, p.y+10, 3, p.h-14);
+  ctx.restore();
+}
+
+function drawPotteryLevel(lvl,t){
+  const g = ctx.createLinearGradient(0,0,0,PLAY_H);
+  g.addColorStop(0,lvl.bg[0]); g.addColorStop(1,lvl.bg[1]);
+  ctx.fillStyle=g; ctx.fillRect(0,0,CW,PLAY_H);
+
+  for(const pl of lvl.platforms) drawPlatform(pl,'neutral');
+
+  movePlayer(lvl.platforms);
+
+  for(const p of lvl.pots){
+    if(p.broken) continue;
+    drawPot(p);
+    if(rectsOverlap(player,p)){
+      p.broken = true;
+      spawnSparkles(p.x+p.w/2, p.y+p.h/2, '#c17a4a');
+      if(Math.random() < lvl.breakChance){
+        awardItemAndReturnToHub(randomElement());
+        return; // level exited — nothing left this frame needs drawing
+      } else {
+        toast('Just dust — an empty pot.');
+      }
+    }
+  }
+
+  const anyLeft = lvl.pots.some(p=>!p.broken);
+  if(!anyLeft){
+    if(lvl.allBrokenAt===null){ lvl.allBrokenAt = t; }
+    else if(t - lvl.allBrokenAt > 1500){
+      for(const p of lvl.pots) p.broken=false;
+      lvl.allBrokenAt = null;
+      toast('The shelves restock — smash away!');
+    }
+  } else {
+    lvl.allBrokenAt = null;
+  }
+
+  drawPlayer(player.x, player.y);
+
+  if(hazardFlash>0){
+    ctx.fillStyle = `rgba(220,60,40,${hazardFlash/18*0.35})`;
+    ctx.fillRect(0,0,CW,PLAY_H);
+    hazardFlash--;
+  }
+
+  drawLevelHUD(lvl);
+}
+
+// ---------------------------------------------------------------------------
+// RENDERING — GARDEN NOOK
+// ---------------------------------------------------------------------------
+let nearPlot = null;
+function plotZone(p){ return {x:p.x-10, y:388, w:p.w+20, h:40}; }
+
+function drawGardenPlot(p,t,lvl){
+  ctx.save();
+  ctx.fillStyle = '#4a3421';
+  roundRect(p.x, p.y, p.w, p.h, 6); ctx.fill();
+  ctx.fillStyle='rgba(0,0,0,0.2)';
+  for(const dx of [10,28,46]){ ctx.beginPath(); ctx.arc(p.x+dx, p.y+p.h/2, 2, 0, Math.PI*2); ctx.fill(); }
+
+  const cx = p.x+p.w/2, baseY = p.y;
+  if(p.bloomed){
+    const pulse = 0.5+0.5*Math.sin(t*0.005);
+    const col = ELEMENT_COLOR[p.elem];
+    const glow = ctx.createRadialGradient(cx,baseY-14,3,cx,baseY-14,20+pulse*4);
+    glow.addColorStop(0,hexToRgba(col,0.5)); glow.addColorStop(1,hexToRgba(col,0));
+    ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(cx,baseY-14,20+pulse*4,0,Math.PI*2); ctx.fill();
+    drawItemIcon(p.elem, cx, baseY-14, 1, 0.9);
+  } else if(p.plantedAt!==null){
+    const frac = clamp((t-p.plantedAt)/lvl.growDuration,0,1);
+    const stemH = 6+frac*20;
+    ctx.strokeStyle='#4a7a34'; ctx.lineWidth=2.4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(cx,baseY); ctx.lineTo(cx,baseY-stemH); ctx.stroke();
+    if(frac>0.35){
+      ctx.fillStyle='#5c9440';
+      ctx.beginPath(); ctx.ellipse(cx-5,baseY-stemH*0.6,6,3,0.5,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(cx+5,baseY-stemH*0.7,6,3,-0.5,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function drawGardenLevel(lvl,t){
+  const g = ctx.createLinearGradient(0,0,0,PLAY_H);
+  g.addColorStop(0,lvl.bg[0]); g.addColorStop(1,lvl.bg[1]);
+  ctx.fillStyle=g; ctx.fillRect(0,0,CW,PLAY_H);
+
+  for(const pl of lvl.platforms) drawPlatform(pl,'earth');
+
+  movePlayer(lvl.platforms);
+
+  nearPlot = null;
+  for(const p of lvl.plots){
+    if(p.plantedAt!==null && !p.bloomed && (t-p.plantedAt)>=lvl.growDuration){
+      p.bloomed = true;
+    }
+    drawGardenPlot(p,t,lvl);
+    if(rectsOverlap(player, plotZone(p))) nearPlot = p;
+  }
+
+  if(nearPlot){
+    let promptText;
+    if(nearPlot.bloomed) promptText = 'Press ENTER to harvest';
+    else if(nearPlot.plantedAt===null) promptText = 'Press ENTER to plant a seed';
+    else promptText = nearPlot.waters<lvl.maxWaters ? 'Press ENTER to water' : 'Growing...';
+    ctx.save();
+    ctx.font="600 12px 'Cinzel', serif"; ctx.textAlign='center'; ctx.fillStyle='#f0e2ab';
+    ctx.fillText(promptText, nearPlot.x+nearPlot.w/2, nearPlot.y-14);
+    ctx.restore();
+  }
+
+  drawPlayer(player.x, player.y);
+
+  if(hazardFlash>0){
+    ctx.fillStyle = `rgba(220,60,40,${hazardFlash/18*0.35})`;
+    ctx.fillRect(0,0,CW,PLAY_H);
+    hazardFlash--;
+  }
+
+  drawLevelHUD(lvl);
+}
+
+function tryGardenAction(){
+  if(!(state==='LEVEL' && currentLevel==='garden') || !nearPlot) return;
+  const lvl = LEVELS.garden;
+  const p = nearPlot;
+  if(p.bloomed){
+    inventory[p.elem]++;
+    toast(`You harvested a ${ELEMENT_ITEM_NAME[p.elem]}!`);
+    spawnSparkles(p.x+p.w/2, p.y, ELEMENT_COLOR[p.elem]);
+    p.elem=null; p.plantedAt=null; p.waters=0; p.bloomed=false;
+  } else if(p.plantedAt===null){
+    p.elem = randomElement();
+    p.plantedAt = performance.now();
+    p.waters = 0;
+    toast('Seed planted.');
+  } else if(p.waters < lvl.maxWaters){
+    p.plantedAt -= lvl.waterBonus;
+    p.waters++;
+    spawnSparkles(p.x+p.w/2, p.y, '#4fb3d9');
+    toast('Watered!');
+  }
+}
+
 
 function drawZoneDecor(lvl,t){
   ctx.save();
